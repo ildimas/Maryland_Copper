@@ -1,0 +1,12 @@
+aiogrpc==1.8
+cffi==1.17.1
+Deprecated==1.2.14
+dualsense-controller==0.3.0
+grpcio==1.66.1
+inputs==0.5
+mavsdk==2.8.3
+protobuf==3.20.1
+pycparser==2.22
+pyee==11.1.1
+typing_extensions==4.12.2
+wrapt==1.16.0
