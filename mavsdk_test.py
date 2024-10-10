@@ -8,6 +8,7 @@ from controller_funcs import Controller_funcs
 import logging
 from keyboard_controll_module import Key_binds
 from sshkeyboard import listen_keyboard, stop_listening
+from coordinates import *
 
 class DroneControls:
     logging.basicConfig(level=logging.INFO)
@@ -28,8 +29,23 @@ class DroneControls:
         async for state in self.drone.core.connection_state():
             logging.info(f"Drone connected: {state}")
             break
+        
+        logging.info("Waiting for drone to have a global position estimate...")
+        async for health in self.drone.telemetry.health():
+            if health.is_global_position_ok and health.is_home_position_ok:
+                logging.info("-- Global position state is good enough for flying.")
+                break
+
+        logging.info("Fetching amsl altitude at home location....")
+        async for terrain_info in self.drone.telemetry.home():
+            self.absolute_altitude = terrain_info.absolute_altitude_m
+            self.absolute_longtitute = terrain_info.longitude_deg
+            self.absolute_latitude = terrain_info.latitude_deg
+            break
+
         logging.info("Arming the drone...")
         await self.drone.action.arm()
+        self.is_armed = True
         
     async def _safe_start_offboard(self):
         try:
@@ -114,10 +130,28 @@ class DroneControls:
         else:
             logging.warning("The manual keyboard mode was used without keyboard_mode setted")
             
+    async def random_positioning(self, height, angle):
+        print(self.absolute_altitude, self.absolute_latitude, self.absolute_longtitute)
+        logging.info("Start positioning")
+        new_latitude, new_longtitude = get_coordinates(self.absolute_latitude, self.absolute_longtitute, pifagor_triangle_distance(height=height))
+        await self.drone.action.takeoff()
+        await asyncio.sleep(5)
+        await self.drone.action.goto_location(latitude_deg=new_latitude, longitude_deg=new_longtitude, absolute_altitude_m=self.absolute_altitude + height, yaw_deg=0)
+        while True:
+            position = await self.drone.telemetry.position().__anext__()
+            logging.info(f"Широта от начала координат: {position.latitude_deg} \n Долгота от начала координат {position.longitude_deg} \n Высота относительно начала координат {position.relative_altitude_m}")
+            
+       
+        
 if __name__ == "__main__":
     async def main():
         x = DroneControls(keyboard_mode=True, connection_string="udp://0.0.0.0:14540")
         await x.connect_to_px4()
-        # await x.manual_gamepad_mode()
-        await x.manual_keyboard_mode()
+        # # await x.manual_gamepad_mode()
+        # await x.manual_keyboard_mode()
+        await x.random_positioning(100, 20)
     asyncio.run(main())
+
+
+# 47.64138 -122.1400654
+# 47.64636 122.13243
