@@ -1,6 +1,10 @@
 ## Инструкция по развертке проекта автономной посадки дронов в симуляторе
 
+
 # Глава 1: установка Unreal Engine и плагина Airsim
+
+==Если у вас возникли проблемы со следованием этому разделу, можете посмотреть этот [гайд](https://www.youtube.com/watch?v=BVkN3CCMg4A "ссылка")== 
+
 ### Шаг 1: Установка Unreal Engine 5
 1. Перейти по **[ссылке](https://store.epicgames.com/ru/ "ссылка")** на официальный сайт компании Epic Games. Зарегистрировать аккаунт, скачать и установить **Epic games launcher**
 ![Alt text](README_IMAGES/Chapter%20one%20pics/egs.png)
@@ -118,7 +122,8 @@
 ![Alt text](README_IMAGES/Chapter%20one%20pics/playerstart.png)
 Если такого объекта на вашей карте нет - то создайте его с помощью меню **Place Actors**
 ![Alt text](README_IMAGES/Chapter%20one%20pics/placeactors.png)
-4. Далее нам надо **изменить стандартный игровой режим**. Для этого во вкладке Окно (Window) выберем пункт **World Settings** 
+4. Далее нам надо **изменить стандартный игровой режим**.
+Для этого во вкладке Окно (Window) выберем пункт **World Settings**. 
 ![Alt text](README_IMAGES/Chapter%20one%20pics/worldsettings.png)
 В открывшемся окне выбираем **Selected GameMode** как **AirSimGameMode**
 ![Alt text](README_IMAGES/Chapter%20one%20pics/airsimmodels.png)
@@ -129,17 +134,34 @@
 
 
 
-*Глава 2 установка SITL px4 в WSL *
-1) Установить wsl2
-2) Склонировать репозиторий в wsl коммандой (git clone https://github.com/PX4/PX4-Autopilot.git --recursive)
-3) В терминале windows с помощью команды ipconfig узнать ip адресс wsl
-4) С помощью команды *nano ~/.bashrc* добавить системную переменную PX4_SIM_HOST_ADDR комаандой *export PX4_SIM_HOST_ADDR=* присвоить значение найденное на шаге 3
-5) Перейти в дерикторию */PX4-Autopilot* и использовать команду  make px4_sitl_default none_iris
+# Глава 2: установка SITL PX4 в WSL 
 
-*Глава 3 Python код для автономного управления дроном  в WSL *
-1) Скопировать репозиторий в wsl командой (git clone https://github.com/ildimas/Aerohack_Beverly_Hills_Misis_4.git)
-2) Cоздать виртуальное окружение с помощью команды python3 -m venv envi (!Вы можете выбрать другое название)
-3) Активировать виртуальное окжуение командой *source envi/bin/activate*
-4) Запустить энтрипоинт файл mavsdk_test.py командой *python3 mavsdk_test.py*
+==Если у вас возникли проблемы со следованием этому разделу, можете посмотреть этот [гайд](https://www.youtube.com/watch?v=DiqgsWIOoW4&t=443s "ссылка")== 
 
-Порядок запуска: Unreal Engine -> SITL PX4 -> Python код
+### Шаг 1: Установка WSL и PX4
+1. Перейти в **Microsoft store** и ввести в строку поиска **wsl** установить первый результат поисковой выдачи
+![Alt text](README_IMAGES/Chapter%20two%20pics/ubuntu.png)
+2. В терминале windows с помощью команды **ipconfig** узнать ip адресс wsl
+![Alt text](README_IMAGES/Chapter%20two%20pics/ipconfig.png)
+3. Открыть командную строку и прописать команду `wsl`
+![Alt text](README_IMAGES/Chapter%20two%20pics/wsl.png)
+4. Склонировать репозиторий в wsl коммандой `git clone https://github.com/PX4/PX4-Autopilot.git --recursive`
+![Alt text](README_IMAGES/Chapter%20two%20pics/files.png)
+5. С помощью команды `nano ~/.bashrc` добавить системную переменную **PX4_SIM_HOST_ADDR** комаандой `export PX4_SIM_HOST_ADDR=` присвоить значение найденное на шаге 2
+6. Перейти в дерикторию **/PX4-Autopilot** и использовать команду  `make px4_sitl_default none_iris`
+![Alt text](README_IMAGES/Chapter%20two%20pics/px4.png)
+
+# Глава 3: Python код для автономного управления дроном в WSL 
+
+==Если у вас возникли проблемы со следованием этому разделу, можете посмотреть этот [гайд](https://www.youtube.com/watch?v=yivyNCtVVDk "ссылка")== 
+
+### Шаг 1: Установка Python
+1. Посмотреть [гайд](https://www.youtube.com/watch?v=hK-fZhh4v8I "ссылка") по установке Python в wsl
+### Шаг 2: Развертка кода автономного управления
+1. Скопировать репозиторий в wsl командой `git clone https://github.com/ildimas/Aerohack_Beverly_Hills_Misis_4.git`
+2. Cоздать виртуальное окружение с помощью команды `python3 -m venv envi` (!Вы можете выбрать другое название)
+3. Активировать виртуальное окжуение командой `source envi/bin/activate`
+![Alt text](README_IMAGES/Chapter%20two%20pics/venv.png)
+4. Запустить энтрипоинт файл mavsdk_test.py командой `python3 mavsdk_test.py`
+
+**Порядок запуска симуляции: Unreal Engine => SITL PX4 => Python код**

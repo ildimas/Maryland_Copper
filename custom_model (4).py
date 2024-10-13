@@ -39,7 +39,7 @@ def create_model(num_envs: int, load: bool = False) -> PPO:
 
 
 if __name__ == "__main__":
-    model = create_model(15, False)
+    model = create_model(15, True)
     
     model.learn(total_timesteps=1_000_000)
     model.save("ppo_pyflyt")
