@@ -9,6 +9,7 @@ import logging
 from keyboard_controll_module import Key_binds
 from sshkeyboard import listen_keyboard, stop_listening
 from coordinates import *
+from mavsdk.camera import (CameraError, Mode)
 
 class DroneControls:
     logging.basicConfig(level=logging.INFO)
@@ -29,6 +30,15 @@ class DroneControls:
         async for state in self.drone.core.connection_state():
             logging.info(f"Drone connected: {state}")
             break
+        
+        
+        
+        try:
+            logging.info("Starting video stream...")
+            await self.drone.camera.start_video_streaming(stream_id=0)
+            print("Video streaming started.")
+        except Exception as e:
+            logging.info(f"Failed to start video streaming: {e}")
         
         logging.info("Waiting for drone to have a global position estimate...")
         async for health in self.drone.telemetry.health():
@@ -135,19 +145,55 @@ class DroneControls:
         logging.info("Start positioning")
         new_latitude, new_longtitude = get_coordinates(self.absolute_latitude, self.absolute_longtitute, pifagor_triangle_distance(height=height))
         await self.drone.action.takeoff()
+        #!!!
+        print_mode_task = asyncio.ensure_future(self.print_mode(self.drone))
+        print_status_task = asyncio.ensure_future(self.print_status(self.drone))
+        running_tasks = [print_mode_task, print_status_task]
+
+        print("Setting mode to 'PHOTO'")
+        try:
+            await self.drone.camera.set_mode(Mode.PHOTO)
+        except CameraError as error:
+            print(f"Setting mode failed with error code: {error._result.result}")
+
+        await asyncio.sleep(2)
+
+        print("Taking a photo")
+        try:
+            await self.drone.camera.take_photo()
+        except CameraError as error:
+            print(f"Couldn't take photo: {error._result.result}")
+
+        # Shut down the running coroutines (here 'print_mode()' and
+        # 'print_status()')
+        for task in running_tasks:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        await asyncio.get_event_loop().shutdown_asyncgens()
+        #!!!
         await asyncio.sleep(5)
         await self.drone.action.goto_location(latitude_deg=new_latitude, longitude_deg=new_longtitude, absolute_altitude_m=self.absolute_altitude + height, yaw_deg=0)
         while True:
-            position = await self.drone.telemetry.position().__anext__()
-            logging.info(f"Широта от начала координат: {position.latitude_deg} \n Долгота от начала координат {position.longitude_deg} \n Высота относительно начала координат {position.relative_altitude_m}")
+            logging.info(await self.drone.camera.capture_info().__anext__())
+            logging.info(await self.drone.camera.current_settings().__anext__())
+            #logging.info(f"Широта от начала координат: {position.latitude_deg} \n Долгота от начала координат {position.longitude_deg} \n Высота относительно начала координат {position.relative_altitude_m}")
             
-       
+    async def print_mode(self, drone):
+        async for mode in drone.camera.mode():
+            print(f"Camera mode: {mode}")
+
+    async def print_status(self, drone):
+        async for status in drone.camera.status():
+            print(status)
         
 if __name__ == "__main__":
     async def main():
-        x = DroneControls(keyboard_mode=True, connection_string="udp://0.0.0.0:14540")
+        x = DroneControls(gamepad_mode=True, connection_string="udp://0.0.0.0:14540")
         await x.connect_to_px4()
-        # # await x.manual_gamepad_mode()
+        # await x.manual_gamepad_mode()
         # await x.manual_keyboard_mode()
         await x.random_positioning(100, 20)
     asyncio.run(main())
