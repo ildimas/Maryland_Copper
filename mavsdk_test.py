@@ -1,19 +1,21 @@
 from mavsdk import System
-from mavsdk.offboard import OffboardError, Attitude, PositionNedYaw, PositionGlobalYaw
-from mavsdk.telemetry import EulerAngle
+from mavsdk.offboard import OffboardError, Attitude, PositionNedYaw, VelocityNedYaw
 import asyncio
-from time import sleep
 from dualsense_controller import DualSenseController
 from controller_funcs import Controller_funcs
 import logging
 from keyboard_controll_module import Key_binds
-from sshkeyboard import listen_keyboard, stop_listening
 from coordinates import *
 from mavsdk.camera import (CameraError, Mode)
+import cv2
+from ultralytics import YOLO
+from multiprocessing import Queue
+from mss import mss
+import numpy as np
 
 class DroneControls:
     logging.basicConfig(level=logging.INFO)
-    def __init__(self, connection_string, gamepad_mode=False, keyboard_mode=False):
+    def __init__(self, connection_string, frame_queue : Queue, gamepad_mode=False, keyboard_mode=False, ):
         if gamepad_mode and keyboard_mode:
             raise ValueError("Only one mode can be set to True: either gamepad_mode or keyboard_mode.")
         if not gamepad_mode and not keyboard_mode:
@@ -23,6 +25,13 @@ class DroneControls:
         self.conn_string = connection_string
         self.manual_mode = False
         self.drone = System()
+        self.pid_x = PIDController(Kp=0.1, Ki=0.0, Kd=0.05)
+        self.pid_y = PIDController(Kp=0.1, Ki=0.0, Kd=0.05)
+        self.error_x = 0.0
+        self.error_y = 0.0
+        self.cv = CVDetect(frame_queue)
+        self.alignment_event = asyncio.Event()
+        self.alignment_active = False
         
     async def connect_to_px4(self):
         logging.info("connetcting...")
@@ -30,8 +39,6 @@ class DroneControls:
         async for state in self.drone.core.connection_state():
             logging.info(f"Drone connected: {state}")
             break
-        
-        
         
         try:
             logging.info("Starting video stream...")
@@ -65,7 +72,6 @@ class DroneControls:
         except OffboardError as e:
             logging.info(f"Offboard mode failed to start: {e._result.result}")
             
-       
     async def _safe_stop_offboard(self):
         logging.info("Stopping offboard mode...")
         try:
@@ -90,22 +96,31 @@ class DroneControls:
             try:
                 controller.activate()
                 while self.manual_mode:
-                    ned = await self.drone.telemetry.position_velocity_ned().__anext__()
-                    current_yaw = await self.drone.telemetry.attitude_euler().__anext__()
-                    logging.info(f"{current_yaw}, {type(current_yaw)}")
-                    logging.info(f"{ned}, {type(ned)}")
-                    current_yaw = current_yaw.yaw_deg
-                    self.manual_mode = not controller.btn_ps._get_value()
-                    pitch_deg, roll_deg = con_func.pitch_roll_picker(float(controller.left_stick.value.y), float(controller.left_stick.value.x))
-                    yaw_deg = current_yaw + con_func.yaw_picker(controller.btn_r1._get_value(), controller.btn_l1._get_value()) 
-                    thrust_value = controller.right_trigger.value  
-                    logging.info(f"TV {thrust_value}")
-                    logging.info(f"LRL {controller.btn_l1._get_value()}, {controller.btn_r1._get_value()}")
-                    logging.info(f"LS {controller.left_stick.value.x}, {controller.left_stick.value.y}" )
                     
-                    
-                    await self.drone.offboard.set_attitude(Attitude(roll_deg=roll_deg, pitch_deg=pitch_deg, yaw_deg=yaw_deg, thrust_value=thrust_value))
-                    # drone.offboard.set_position_global(position_global_yaw=PositionGlobalYaw(0.0, 0.0, 0.0, yaw_deg))
+                    if controller.btn_ps._get_value():
+                            self.alignment_active = not self.alignment_active
+                            await asyncio.sleep(0.2)
+                            
+                    if self.alignment_active:
+                        await self.autonomous_alignment()
+                    else:
+                        ned = await self.drone.telemetry.position_velocity_ned().__anext__()
+                        current_yaw = await self.drone.telemetry.attitude_euler().__anext__()
+                        #! logging.info(f"{current_yaw}, {type(current_yaw)}")
+                        #! logging.info(f"{ned}, {type(ned)}")
+                        current_yaw = current_yaw.yaw_deg
+                        
+                        
+                            
+                        
+                        pitch_deg, roll_deg = con_func.pitch_roll_picker(float(controller.left_stick.value.y), float(controller.left_stick.value.x))
+                        yaw_deg = current_yaw + con_func.yaw_picker(controller.btn_r1._get_value(), controller.btn_l1._get_value()) 
+                        thrust_value = controller.right_trigger.value
+                        logging.info(f"TV {thrust_value}")
+                        #! logging.info(f"LRL {controller.btn_l1._get_value()}, {controller.btn_r1._get_value()}")
+                        #! logging.info(f"LS {controller.left_stick.value.x}, {controller.left_stick.value.y}" )
+                        
+                        await self.drone.offboard.set_attitude(Attitude(roll_deg=roll_deg, pitch_deg=pitch_deg, yaw_deg=yaw_deg, thrust_value=thrust_value))
                     await asyncio.sleep(0.01)  
                     
                 controller.deactivate()
@@ -146,33 +161,6 @@ class DroneControls:
         new_latitude, new_longtitude = get_coordinates(self.absolute_latitude, self.absolute_longtitute, pifagor_triangle_distance(height=height))
         await self.drone.action.takeoff()
         #!!!
-        print_mode_task = asyncio.ensure_future(self.print_mode(self.drone))
-        print_status_task = asyncio.ensure_future(self.print_status(self.drone))
-        running_tasks = [print_mode_task, print_status_task]
-
-        print("Setting mode to 'PHOTO'")
-        try:
-            await self.drone.camera.set_mode(Mode.PHOTO)
-        except CameraError as error:
-            print(f"Setting mode failed with error code: {error._result.result}")
-
-        await asyncio.sleep(2)
-
-        print("Taking a photo")
-        try:
-            await self.drone.camera.take_photo()
-        except CameraError as error:
-            print(f"Couldn't take photo: {error._result.result}")
-
-        # Shut down the running coroutines (here 'print_mode()' and
-        # 'print_status()')
-        for task in running_tasks:
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-        await asyncio.get_event_loop().shutdown_asyncgens()
         #!!!
         await asyncio.sleep(5)
         await self.drone.action.goto_location(latitude_deg=new_latitude, longitude_deg=new_longtitude, absolute_altitude_m=self.absolute_altitude + height, yaw_deg=0)
@@ -181,23 +169,101 @@ class DroneControls:
             logging.info(await self.drone.camera.current_settings().__anext__())
             #logging.info(f"Широта от начала координат: {position.latitude_deg} \n Долгота от начала координат {position.longitude_deg} \n Высота относительно начала координат {position.relative_altitude_m}")
             
-    async def print_mode(self, drone):
-        async for mode in drone.camera.mode():
-            print(f"Camera mode: {mode}")
+            
+    # def update_errors(self, error_x, error_y):
+    #     # Update the error values (called from CV code)
+    #     self.error_x = error_x
+    #     self.error_y = error_y
+            
+    async def autonomous_alignment(self):
+        # await self.drone.offboard.set_velocity_ned(VelocityNedYaw(0.0, 0.0, 0.0, 0.0))
+        # await self._safe_start_offboard()
 
-    async def print_status(self, drone):
-        async for status in drone.camera.status():
-            print(status)
+        # Start the CV detection loop
+        if self.alignment_active:
+            
+            self.error_x, self.error_y = await self.cv.detect_screen()
+            
+            # Compute time delta
+            dt = 0.1
+            
+            # Compute control outputs
+            control_x = self.pid_x.compute(self.error_x, dt)
+            control_y = self.pid_y.compute(self.error_y, dt)
+            
+            # Limit control outputs to acceptable ranges
+            max_velocity = 1.0
+            control_x = max(min(control_x, max_velocity), -max_velocity)
+            control_y = max(min(control_y, max_velocity), -max_velocity)
+            # Send velocity commands to the drone
+            await self.drone.offboard.set_velocity_ned(VelocityNedYaw(control_y, control_x, 0.0, 0.0))
+            
+            # Sleep for the time step duration
+            await asyncio.sleep(dt)
+            
+class CVDetect:
+    def __init__(self, frame_queue : asyncio.Queue):
+        self.model = YOLO('weights.pt')
+        self.frame_queue = frame_queue
+        self.error_y: float = 0.0
+        self.error_x: float = 0.0
         
+    async def detect_screen(self):
+        if not self.frame_queue.empty():
+            img = await self.frame_queue.get() 
+            await self.process_image(img)
+        return self.error_x, self.error_y
+        
+    async def process_image(self, img):
+       
+        results = self.model(img)
+        
+        # logging.info(results[0])
+        detections = results[0].boxes
+        
+        for detection in detections:
+            
+            x1, y1, x2, y2 = detection.xyxy[0]
+            
+            class_id = int(detection.cls[0])
+            class_name = self.model.names[class_id]
+            
+            if class_name == 'safe-landing-zone':
+                logging.info("Safe zone detected !!!")
+                bbox_center_x = (x1 + x2) / 2
+                bbox_center_y = (y1 + y2) / 2
+                
+                cv2.rectangle(img, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
+                cv2.circle(img, (int(bbox_center_x), int(bbox_center_y)), 5, (0, 0, 255), -1)
+                
+                img_center_x = img.shape[1] / 2
+                img_center_y = img.shape[0] / 2
+                self.error_x = bbox_center_x - img_center_x
+                self.error_y = bbox_center_y - img_center_y
+        
+
+class PIDController:
+    def __init__(self, Kp, Ki, Kd, setpoint=0):
+        self.Kp = Kp
+        self.Ki = Ki
+        self.Kd = Kd
+        self.setpoint = setpoint
+        self.integral = 0
+        self.previous_error = 0
+
+    def compute(self, measurement, dt):
+        error = self.setpoint - measurement
+        self.integral += error * dt
+        derivative = (error - self.previous_error) / dt if dt > 0 else 0
+        output = self.Kp * error + self.Ki * self.integral + self.Kd * derivative
+        self.previous_error = error
+        return output
+
 if __name__ == "__main__":
     async def main():
         x = DroneControls(gamepad_mode=True, connection_string="udp://0.0.0.0:14540")
         await x.connect_to_px4()
-        # await x.manual_gamepad_mode()
+        await x.manual_gamepad_mode()
         # await x.manual_keyboard_mode()
-        await x.random_positioning(100, 20)
+        # await x.random_positioning(100, 20)
     asyncio.run(main())
-
-
-# 47.64138 -122.1400654
-# 47.64636 122.13243
