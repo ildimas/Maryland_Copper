@@ -12,7 +12,7 @@ import logging
 import asyncio
 
 class Webrtc_parser:
-    def __init__(self, frame_queue: asyncio.Queue):
+    def __init__(self, frame_queue: asyncio.LifoQueue):
         self.is_active = True 
         self.fq = frame_queue
         logging.info("initial pixi")
@@ -44,7 +44,7 @@ class Webrtc_parser:
                 frame = np.array(image)
                 frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
                 await self.fq.put(frame)
-                logging.info("Frame is in queue")
+                #!logging.info("Frame is in queue")
                 await asyncio.sleep(0.01)
                 
     async def stop(self):
@@ -52,7 +52,7 @@ class Webrtc_parser:
         logging.info("Active stopped")
         
 if __name__ == "__main__":
-    y = asyncio.Queue(1000000)
+    y = asyncio.LifoQueue(1000000)
     x = Webrtc_parser(y)
     x.main()
     

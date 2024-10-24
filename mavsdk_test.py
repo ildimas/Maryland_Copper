@@ -32,6 +32,9 @@ class DroneControls:
         self.cv = CVDetect(frame_queue)
         self.alignment_event = asyncio.Event()
         self.alignment_active = False
+        self.x_threshold = 320
+        self.y_threshold = 160
+        self.state = 'horizontal_alignment'
         
     async def connect_to_px4(self):
         logging.info("connetcting...")
@@ -168,79 +171,110 @@ class DroneControls:
             logging.info(await self.drone.camera.capture_info().__anext__())
             logging.info(await self.drone.camera.current_settings().__anext__())
             #logging.info(f"Широта от начала координат: {position.latitude_deg} \n Долгота от начала координат {position.longitude_deg} \n Высота относительно начала координат {position.relative_altitude_m}")
-            
-            
-    # def update_errors(self, error_x, error_y):
-    #     # Update the error values (called from CV code)
-    #     self.error_x = error_x
-    #     self.error_y = error_y
-            
+    
     async def autonomous_alignment(self):
-        # await self.drone.offboard.set_velocity_ned(VelocityNedYaw(0.0, 0.0, 0.0, 0.0))
-        # await self._safe_start_offboard()
-
-        # Start the CV detection loop
+        attitude = await self.drone.telemetry.attitude_euler().__anext__()
+        self.current_yaw = attitude.yaw_deg
         if self.alignment_active:
             
-            self.error_x, self.error_y = await self.cv.detect_screen()
+            self.error_x, self.error_y, isZone = await self.cv.detect_screen()
+            logging.info(f"Найдена зона {isZone}")
+            dt = 0.05
             
-            # Compute time delta
-            dt = 0.1
+            if not (350 < abs(self.error_x) < 370):
+                self.state = 'horizontal_alignment'
+            elif not (360 < abs(self.error_y)):
+                self.state = 'approaching'
             
-            # Compute control outputs
-            control_x = self.pid_x.compute(self.error_x, dt)
-            control_y = self.pid_y.compute(self.error_y, dt)
+            if isZone:
+                if self.state == 'horizontal_alignment':
+                    if 350 < abs(self.error_x) < 370:
+                        control_x = self.pid_x.compute(self.error_x, dt)
+                        control_x = max(min(control_x, 1.0), -1.0)
+                        control_y = 0.0
+                    else:
+                        self.state = 'approaching'
+                        control_x = 0.0
+                        control_y = 0.0
+                        logging.info("Horizontal alignment complete. Starting approach.")
+                elif self.state == 'approaching':
+                    if 360 < abs(self.error_y) :
+                        control_y = -1000.0
+                        # control_x = self.pid_x.compute(self.error_x, dt)
+                        # control_x = max(min(control_x, 1.0), -1.0)
+                        # control_y = self.pid_y.compute(self.error_y, dt)
+                        # control_y = max(min(control_y, 1.0), -1.0)
+                    else:
+                        self.state = 'stopping'
+                        control_x = 0.0
+                        control_y = 0.0
+                        logging.info("Approach complete. Drone is in position.")
+                else:
+                    control_x = 0.0
+                    control_y = 0.0
+                    logging.info("Drone has stopped. Ready to land.")
+            else:
+                rotation_speed = 200.0
+                self.current_yaw = (self.current_yaw + rotation_speed * dt) 
+                control_x = 0.0
+                control_y = 0.0
             
-            # Limit control outputs to acceptable ranges
-            max_velocity = 1.0
-            control_x = max(min(control_x, max_velocity), -max_velocity)
-            control_y = max(min(control_y, max_velocity), -max_velocity)
-            # Send velocity commands to the drone
-            await self.drone.offboard.set_velocity_ned(VelocityNedYaw(control_y, control_x, 0.0, 0.0))
-            
-            # Sleep for the time step duration
-            await asyncio.sleep(dt)
-            
+            await self.drone.offboard.set_velocity_ned(
+            VelocityNedYaw(control_y, control_x, 0.0, self.current_yaw)
+            )
+        
+        logging.info(f"State: {self.state}, Error X: {self.error_x}, Error Y: {self.error_y}")
+        await asyncio.sleep(dt)
+
 class CVDetect:
     def __init__(self, frame_queue : asyncio.Queue):
         self.model = YOLO('weights.pt')
         self.frame_queue = frame_queue
-        self.error_y: float = 0.0
-        self.error_x: float = 0.0
-        
+        self.error_y = 0.0
+        self.error_x = 0.0
+        self.isZone = True 
+    
     async def detect_screen(self):
         if not self.frame_queue.empty():
-            img = await self.frame_queue.get() 
-            await self.process_image(img)
-        return self.error_x, self.error_y
+            img = await self.frame_queue.get()
+            errors = await self.process_image(img)
+            if errors:
+                min_error = min(errors, key=lambda e: (e[0]**2 + e[1]**2)**0.5)
+                self.error_x, self.error_y = min_error
+                self.isZone = True 
+            else:
+                self.error_x, self.error_y = 0.0, 0.0
+                self.isZone = False
+        return self.error_x, self.error_y, self.isZone
         
     async def process_image(self, img):
-       
         results = self.model(img)
-        
-        # logging.info(results[0])
         detections = results[0].boxes
+        
+        errors = []
         
         for detection in detections:
             
             x1, y1, x2, y2 = detection.xyxy[0]
             
+            
             class_id = int(detection.cls[0])
             class_name = self.model.names[class_id]
             
             if class_name == 'safe-landing-zone':
+                logging.info(f"x1 : {x1}, x2 : {x2}, y1 : {y1}, y2 : {y2}")
                 logging.info("Safe zone detected !!!")
                 bbox_center_x = (x1 + x2) / 2
                 bbox_center_y = (y1 + y2) / 2
                 
-                cv2.rectangle(img, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
-                cv2.circle(img, (int(bbox_center_x), int(bbox_center_y)), 5, (0, 0, 255), -1)
-                
                 img_center_x = img.shape[1] / 2
                 img_center_y = img.shape[0] / 2
-                self.error_x = bbox_center_x - img_center_x
-                self.error_y = bbox_center_y - img_center_y
+                error_x = bbox_center_x - img_center_x
+                error_y = bbox_center_y - img_center_y
+                
+                errors.append([error_x, error_y])
         
+        return errors
 
 class PIDController:
     def __init__(self, Kp, Ki, Kd, setpoint=0):
