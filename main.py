@@ -25,7 +25,7 @@ if __name__ == '__main__':
     async def main_loop():
         await asyncio.gather(
             main(),
-            pixel(),
+            # pixel(),
             # image_processor()   
         )
 
